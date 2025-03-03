@@ -1,0 +1,8 @@
+streamlit
+google-cloud-aiplatform
+yt-dlp
+moviepy==1.0.3
+numpy
+google-cloud-storage
+pandas
+Wand
