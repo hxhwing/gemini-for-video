@@ -40,7 +40,7 @@ MODEL_ID = st.sidebar.selectbox(
         "gemini-1.5-pro-001",
         "gemini-1.5-flash-001",
     ),
-    placeholder="gemini-1.5-pro-002",
+    placeholder="gemini-2.0-flash-001",
 )
 
 temperature = st.sidebar.slider("Temperature:", 0.0, 1.0, 0.2, 0.1)
