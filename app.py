@@ -61,7 +61,6 @@ def gcs_to_http(gcs_path):
 st.sidebar.header(("Source Video"))
 
 input_video = st.sidebar.text_input("Please input URL link (Youtube or GCS)")
-st.sidebar.text("You can use this for a quick demo: https://www.youtube.com/watch?v=DyZpTaC8VMc")
 
 # sample_input_video = "https://www.youtube.com/watch?v=DyZpTaC8VMc"
 # gcs_path = "gs://netease-ie-videos/谷歌打标测试/单镜头理解/九大兵团_03吕布受降.mp4"
@@ -635,6 +634,7 @@ elif "highlight" in usecase:
     clip_timestamps = []
     subtitle_data = []
     with col2:
+        st.write("`You can use this for a quick demo: https://www.youtube.com/watch?v=DyZpTaC8VMc`")
         if st.button("Analyze video"):
             output_path = output_path + "/highlight-gen"
             # print(f"Highlights output path: {output_path}")
