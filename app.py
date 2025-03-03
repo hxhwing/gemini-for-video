@@ -634,7 +634,7 @@ elif "highlight" in usecase:
     clip_timestamps = []
     subtitle_data = []
     with col2:
-        st.write("`You can use this for a quick demo: https://www.youtube.com/watch?v=DyZpTaC8VMc`")
+        st.write("You can use `https://www.youtube.com/watch?v=DyZpTaC8VMc` for a quick demo")
         if st.button("Analyze video"):
             output_path = output_path + "/highlight-gen"
             # print(f"Highlights output path: {output_path}")
@@ -733,6 +733,7 @@ elif "shot" in usecase:
 
 
     with col2:
+        st.write("You can use `gs://netease-ie-videos/谷歌打标测试/综合成片理解和重构/董卓故事-语音版.mp4` for a quick demo")
         if st.button("Analyze video"):
             shot_analysis_output_path = output_path + "/shot-analysis"
 
