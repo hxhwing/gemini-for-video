@@ -391,7 +391,8 @@ def download_youtube_and_get_filename(url):
         "outtmpl": "%(id)s.%(ext)s",
         # 'cookiesfrombrowser': ('chrome', ),
         'nocheckcertificate': True,
-        'ignoreerrors': True
+        'ignoreerrors': True,
+        'cookiefile': "youtube-cookies.txt"  # 默认使用cookie文件
     }
 
     try:
@@ -676,7 +677,7 @@ elif "highlight" in usecase:
 
             with st.status("Generating highlights..."):
                 output_video_path = f"{src_video_file_path.split('.')[0]}_clipped.mp4"
-                print(clip_timestamps)
+                # print(clip_timestamps)
                 output = cut_and_merge_video(
                     input_video_path=src_video_file_path,
                     time_stamps=clip_timestamps,
@@ -745,7 +746,7 @@ elif "shot" in usecase:
                 else:
                     response = generate(shot_prompt, video_url, generation_config)
 
-                print(response)
+                # print(response)
                 df = pd.DataFrame(json.loads(response))
 
                 st.dataframe(df, hide_index=True)
