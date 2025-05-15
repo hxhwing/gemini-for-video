@@ -33,17 +33,23 @@ st.sidebar.header(("Choose a model"))
 MODEL_ID = st.sidebar.selectbox(
     "Model",
     (
+        "gemini-2.5-pro-preview-03-25",
+        "gemini-2.5-pro-preview-05-06",
+        "gemini-2.5-flash-preview-04-17",
         "gemini-2.0-flash-001",
-        "gemini-1.5-pro-002",
-        "gemini-2.0-flash-exp",
-        "gemini-1.5-flash-002",
-        "gemini-1.5-pro-001",
-        "gemini-1.5-flash-001",
     ),
     placeholder="gemini-2.0-flash-001",
 )
 
 temperature = st.sidebar.slider("Temperature:", 0.0, 1.0, 0.2, 0.1)
+
+max_output_tokens = st.sidebar.slider(
+    "Max output tokens",
+    min_value=8192,
+    max_value=65535,
+    value=8192
+)
+
 
 
 def gcs_to_http(gcs_path):
@@ -350,7 +356,7 @@ def generate_with_image(prompt, image_list, video, generation_config):
     return responses.text
 
 generation_config = {
-    "max_output_tokens": 8192,
+    "max_output_tokens": max_output_tokens,
     "temperature": temperature,
     "top_p": 0.95,
     "response_mime_type": "application/json",
