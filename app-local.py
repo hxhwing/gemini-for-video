@@ -1,8 +1,8 @@
 import streamlit as st
 import json
 import base64
-import vertexai
-from vertexai.generative_models import GenerativeModel, Part, SafetySetting, Content
+from google import genai
+from google.genai.types import Part, SafetySetting, Content, GenerateContentConfig, GoogleSearch, HttpOptions, Tool
 import yt_dlp
 from moviepy.editor import VideoFileClip, concatenate_videoclips, TextClip, CompositeVideoClip
 import pandas as pd
@@ -12,13 +12,19 @@ import os
 import shutil
 import datetime
 
+## Please use your own PROJECT_ID, REGION, and GCS_BUCKET
 PROJECT_ID = "hxhdemo"
-REGION = "us-central1"
+REGION = "global"
+gcs_path = "gs://hxhdemo-public"
 
 current_datetime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 output_path = "/Users/maxxh/Downloads/game-highlight"
-gcs_path = "gs://hxhdemo"
+
+if 'use_google_search' not in st.session_state:
+    st.session_state.use_google_search = False
+
+
 
 st.set_page_config(
     layout="wide",
@@ -30,16 +36,24 @@ st.sidebar.header(("Choose a model"))
 MODEL_ID = st.sidebar.selectbox(
     "Model",
     (
-        "gemini-1.5-pro-002",
-        "gemini-2.0-flash-exp",
-        "gemini-1.5-flash-002",
-        "gemini-1.5-pro-001",
-        "gemini-1.5-flash-001",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-001",
     ),
-    placeholder="gemini-1.5-pro-002",
+    placeholder="gemini-2.5-flash",
 )
 
 temperature = st.sidebar.slider("Temperature:", 0.0, 1.0, 0.2, 0.1)
+
+max_output_tokens = st.sidebar.slider(
+    "Max output tokens",
+    min_value=8192,
+    max_value=65535,
+    value=8192
+)
+
+st.session_state.use_google_search = st.sidebar.checkbox("Google Search")
+
 
 
 def gcs_to_http(gcs_path):
@@ -56,9 +70,7 @@ def gcs_to_http(gcs_path):
 ########### Sidebar
 st.sidebar.header(("Source Video"))
 
-input_video = st.sidebar.text_input("**Please input URL link (Youtube or GCS)**")
-st.sidebar.text("You can use this for a quick demo: https://www.youtube.com/watch?v=DyZpTaC8VMc")
-
+input_video = st.sidebar.text_input("Please input URL link (Youtube or GCS)")
 
 # sample_input_video = "https://www.youtube.com/watch?v=DyZpTaC8VMc"
 # gcs_path = "gs://netease-ie-videos/谷歌打标测试/单镜头理解/九大兵团_03吕布受降.mp4"
@@ -70,7 +82,7 @@ if input_video:
         try:
             st.sidebar.video(gcs_to_http(input_video), format="video/mp4")
         except Exception as e:
-            st.sidebar.write("Can not show videos")
+            st.sidebar.write("无法直接展示视频")
 
 def save_uploaded_video(uploaded_file):
     # 确保上传的文件是视频
@@ -93,7 +105,7 @@ def save_uploaded_video(uploaded_file):
         return save_path
     return None
 
-uploaded_file = st.sidebar.file_uploader("**Or upload your video file**", type=['mp4', 'mov', 'flv', 'wmv'])
+uploaded_file = st.sidebar.file_uploader("Or upload your video file", type=['mp4', 'mov', 'flv', 'wmv'])
 
 
 if uploaded_file is not None:
@@ -112,6 +124,7 @@ if uploaded_file is not None:
 usecase = st.sidebar.selectbox(
     "Please choose a use case",
     ("Video highlights", "Video shot analysis"), index=None)
+
 
 
 
@@ -161,6 +174,64 @@ Please provide output in JSON format only. The response should:
  - Be properly formatted JSON
 
 Focus on moments that would generate high engagement on social media platforms like YouTube Shorts, TikTok, or Instagram Reels."""
+
+tf26_highlight_prompt = """请分析给定的 FragPunk 游戏视频，并根据以下标准识别和提取其中的高光精彩时刻。高光时刻应突出游戏的独特机制和玩家的精彩操作。
+
+## 游戏核心规则与高光标准示例:
+
+### 碎片卡牌(Shard Cards)的策略性运用:
+ - 改变战局的卡牌使用： 找出那些通过激活碎片卡牌，瞬间扭转劣势、创造优势或实现出其不意击杀的时刻。例如，使用 "Hud Remix" 交换生命值、"Life Saver" 复活队友、"Death's Embrace" 瞬杀敌人，或者 "Tick Tock" 限制敌人行动时间。
+ - 卡牌组合的巧妙运用： 识别玩家在同一轮或连续几轮中，通过卡牌的组合效应，达成大规模击杀、完美防守或快速推进的精彩配合。
+ - 应对敌人卡牌的反制： 玩家成功预判或应对敌人激活的碎片卡牌，并采取有效措施反制的瞬间。
+
+### 多杀和连杀：
+ - 高难度多杀： 玩家在短时间内连续击败多名敌人（如三杀、四杀、五杀），特别是那些在不利局势下完成的多杀。
+ - 利用环境或技能的连杀： 结合英雄技能、碎片卡牌效果或地图元素实现的流畅连杀。
+
+###关键击杀：
+ - 扭转局势的最后一击： 在比分胶着或时间紧迫时，玩家击杀关键敌人，直接导致胜利或避免失败的时刻。
+ - 高价值目标的击杀： 例如在 "Shard Clash" 模式中，成功击杀正在安装或拆除转换器的敌人。
+
+### 英雄技能的精彩运用：
+ - 技能与枪法的完美结合： 玩家运用英雄的独特技能(Lancer abilities)配合精准枪法, 实现高难度击杀或脱险。
+ - 技能的战术价值： 英雄技能在控制区域、掩护队友、侦察或治疗等方面的出色表现。
+
+### 团队配合与战术执行：
+ - 完美团灭： 团队成员之间默契配合，成功将敌方全体击杀。
+ - 战术执行成功： 团队通过精心策划的战术（如包抄、诱敌深入、集中火力等）取得显著进展或胜利的时刻。
+ - 救援与辅助： 队友之间互相掩护、救援或提供关键辅助，最终帮助团队取得优势的时刻。
+
+### 出人意料或搞笑时刻（可选）：
+ - 意想不到的击杀： 通过非传统方式或在不可能的情况下完成的击杀。
+ - 卡牌效果带来的趣味性： 碎片卡牌生效后出现的滑稽或出乎意料的游戏场面。
+
+## 输出格式要求：
+
+Please provide the analysis in this JSON format:
+{
+    "title": "engaging social media title",
+    "description": "compelling social share text",
+    "highlights":
+    [
+        {
+            "start_time": "MM:SS",
+            "end_time": "MM:SS",
+            "audio_transcribe": "relevant game audio/commentary",
+            "highlight_reason": "explanation of why this is a highlight moment",
+            "commentary":
+            {
+                "en": "Exciting commentary describing the highlight moment in English",
+                "zh": "精彩的解说词描述高光时刻(中文)"
+            }
+        }
+    ]
+}
+
+## 其他要求
+ - Focus on moments that would generate high engagement on social media platforms like YouTube Shorts, TikTok, or Instagram Reels.
+ - 注意保持每段高光时刻的完整性
+ - 所有高光的时间戳加在一起不要少于 1.5 分钟, 也不要超过 2 分钟
+ - commentary 要简短, 不超过15个words"""
 
 
 x20_highlight_prompt = """You are an expert gaming content analyst specializing in Marvel Rivals and hero shooter games. Analyze the provided gameplay footage to identify 6-7 viral-worthy moments optimized for social media sharing, including match-defining victory sequences. Need to cover highlights from beginning until the end of the video to ensure comprehensive coverage.
@@ -301,20 +372,27 @@ shot_prompt = """你是一位专业的视频分析专家和剧本编剧。现在
 - 语义分析要深入到位
 - 品质评分要客观公正，需考虑画面构图、清晰度、色彩等因素
 
-4. 所有视频均为网易发行的<率土之滨>游戏, 游戏以三国历史为背景, 玩家将扮演一方诸侯, 在一个真实还原的古代战争沙盘世界中发展势力, 与其他玩家实时对抗.
-
 请基于以上规范，对视频进行专业、系统的分镜分析。"""
 
 
+client = genai.Client(
+    vertexai=True, project=PROJECT_ID, location=REGION
+)
+
 def generate(prompt, video, generation_config):
-    vertexai.init(project=PROJECT_ID, location=REGION)
-    model = GenerativeModel(
-        MODEL_ID,
+    tools = []
+    if st.session_state.use_google_search:
+        tools.append(Tool(google_search=GoogleSearch()))
+
+    generate_content_config = GenerateContentConfig(
+        tools=tools,
+        **generation_config
     )
-    responses = model.generate_content(
-        [prompt, video],
-        generation_config=generation_config,
-        safety_settings=safety_settings,
+
+    responses = client.models.generate_content(
+        model=MODEL_ID,
+        contents=[prompt, video],
+        config=generate_content_config,
         # stream=True,
     )
 
@@ -322,61 +400,48 @@ def generate(prompt, video, generation_config):
 
 
 def generate_with_image(prompt, image_list, video, generation_config):
-    vertexai.init(project=PROJECT_ID, location=REGION)    
-    model = GenerativeModel(
-        MODEL_ID,
-    )
     image_prompt = """另外请仔细参考以下图片，准确识别视频中出现的人物，如果人物没有精确匹配，请忽略参考图片: """
     Content = [prompt, image_prompt]
     for image in image_list:
         Content.append(f"{image["text"]}:")
         image_url = Part.from_uri(
+            file_uri=image["url"],
             mime_type="image/*",
-            uri=image["url"],
             )
         Content.append(image_url)
         Content.append("\n")
     Content.append(video)
     # print(Content)
-    responses = model.generate_content(
+    tools = []
+    if st.session_state.use_google_search:
+        tools.append(Tool(google_search=GoogleSearch()))
+
+    generate_content_config = GenerateContentConfig(
+        tools=tools,
+        **generation_config
+    )
+
+    responses = client.models.generate_content(
+        model=MODEL_ID,
         contents = Content,
-        generation_config=generation_config,
-        safety_settings=safety_settings,
+        config=generate_content_config,
         # stream=True,
     )
 
     return responses.text
 
 generation_config = {
-    "max_output_tokens": 8192,
+    "max_output_tokens": max_output_tokens,
     "temperature": temperature,
     "top_p": 0.95,
     "response_mime_type": "application/json",
 }
 
-safety_settings = [
-    SafetySetting(
-        category=SafetySetting.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold=SafetySetting.HarmBlockThreshold.OFF,
-    ),
-    SafetySetting(
-        category=SafetySetting.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold=SafetySetting.HarmBlockThreshold.OFF,
-    ),
-    SafetySetting(
-        category=SafetySetting.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold=SafetySetting.HarmBlockThreshold.OFF,
-    ),
-    SafetySetting(
-        category=SafetySetting.HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold=SafetySetting.HarmBlockThreshold.OFF,
-    ),
-]
 
 # sample_input_video = "https://www.youtube.com/watch?v=DyZpTaC8VMc"
 video_url = Part.from_uri(
+    file_uri=input_video,
     mime_type="video/*",
-    uri=input_video,
 )
 
 
@@ -387,9 +452,11 @@ def download_youtube_and_get_filename(url):
         "format": "best",  # 最佳质量
         "quiet": False,  # 显示下载进度
         "outtmpl": "%(id)s.%(ext)s",
-        # 'cookiesfrombrowser': ('chrome', ),
+        'cookiesfrombrowser': ('chrome', ),
+        # 'cookiesfrombrowser': ('firefox', ),
         'nocheckcertificate': True,
-        'ignoreerrors': True
+        'ignoreerrors': True,
+        # 'cookiefile': 'cookie-yt.txt',
     }
 
     try:
@@ -499,7 +566,7 @@ def cut_and_merge_video(input_video_path, time_stamps, output_video_path):
     final_clip = concatenate_videoclips(video_clips)
 
     # 导出最终视频
-    final_clip.write_videofile(output_video_path)
+    final_clip.write_videofile(output_video_path, codec='libx264', audio_codec='aac')
 
     # 释放资源
     video.close()
@@ -586,14 +653,14 @@ def add_bilingual_subtitle(video_path, subtitle_data, output_path):
     # 将所有字幕合成到视频上
     final_video = CompositeVideoClip([video] + subtitle_clips)
 
-    # # 添加更多写入参数以确保质量
-    # final_video.write_videofile(output_path, 
-    #                           codec='libx264', 
-    #                           audio_codec='aac',
-    #                           fps=video.fps)  # 使用原视频的帧率
+    # 添加更多写入参数以确保质量
+    final_video.write_videofile(output_path, 
+                              codec='libx264', 
+                              audio_codec='aac',
+                              fps=video.fps)  # 使用原视频的帧率
     
     # 导出最终视频
-    final_video.write_videofile(output_path)
+    # final_video.write_videofile(output_path)
     return output_path
 
 
@@ -603,7 +670,7 @@ def add_bilingual_subtitle(video_path, subtitle_data, output_path):
 st.header(("Gemini for Video Analysis"))
 
 if usecase is None:
-    st.markdown(":red ## Please choose a use case")
+    st.write("Please choose a use case")
 
 elif "highlight" in usecase:
     st.subheader(("Video highlights"), divider=True)
@@ -612,8 +679,22 @@ elif "highlight" in usecase:
     with col1:
         option = st.selectbox(
             "Choose a Prompt template",
-            ("General highlights generation", "Game specific (x20)"),
+            ("General highlights generation", "Game(x20)", "Game(tf-l26)" ),
         )
+        if "tf-l26" in option:
+            prompt = st.text_area(
+                "**:blue-background[Prompt]**",
+                value=tf26_highlight_prompt,
+                height=340,
+                label_visibility="visible",
+            )
+        if "x20" in option:
+            prompt = st.text_area(
+                "**:blue-background[Prompt]**",
+                value=x20_highlight_prompt,
+                height=340,
+                label_visibility="visible",
+            )            
         if "General" in option:
             prompt = st.text_area(
                 "**:blue-background[Prompt]**",
@@ -621,17 +702,16 @@ elif "highlight" in usecase:
                 height=340,
                 label_visibility="visible",
             )
-        else: 
-            prompt = st.text_area(
-                "**:blue-background[Prompt]**",
-                value=x20_highlight_prompt,
-                height=340,
-                label_visibility="visible",
-            )
 
     clip_timestamps = []
     subtitle_data = []
     with col2:
+        st.write("You can use `https://www.youtube.com/watch?v=DyZpTaC8VMc` for a quick demo")
+        col_clip, col_subtitle = st.columns(2)
+        with col_clip:
+            clip_checkbox = st.checkbox("clip")
+        with col_subtitle:
+            subtitle_checkbox = st.checkbox("subtitle")
         if st.button("Analyze video"):
             output_path = output_path + "/highlight-gen"
             # print(f"Highlights output path: {output_path}")
@@ -645,50 +725,51 @@ elif "highlight" in usecase:
                 ]
                 # print(clip_timestamps)
 
-            with st.status("Downloading video file..."):
-                if "http" in input_video:
-                    file_name = f"{input_video.split('=')[1]}.mp4"
-                    if os.path.exists(f"{output_path}/{file_name}"):
-                        st.write(file_name + " already exists")
-                        src_video_file_path = f"{output_path}/{file_name}"
-                    else:
-                        input_video_file = download_youtube_and_get_filename(input_video)
-                        src_video_file_path = move_file(input_video_file, output_path)
-                        st.write("Source Video: " + src_video_file_path)
+            if clip_checkbox:
+                with st.status("Downloading video file..."):
+                    if "http" in input_video:
+                        file_name = f"{input_video.split('=')[1]}.mp4"
+                        if os.path.exists(f"{output_path}/{file_name}"):
+                            st.write(file_name + " already exists")
+                            src_video_file_path = f"{output_path}/{file_name}"
+                        else:
+                            input_video_file = download_youtube_and_get_filename(input_video)
+                            src_video_file_path = move_file(input_video_file, output_path)
+                            st.write("Source Video: " + src_video_file_path)
 
-                if "gs://" in input_video:
-                    file_name = input_video.split("/")[-1]
-                    if os.path.exists(f"{output_path}/{file_name}"):
-                        st.write(file_name + " already exists")
-                        src_video_file_path = f"{output_path}/{file_name}"
-                    else:
-                        input_video_file = download_blob(input_video)
-                        src_video_file_path = move_file(input_video_file, output_path)
-                        st.write("Source Video: " + src_video_file_path)
+                    if "gs://" in input_video:
+                        file_name = input_video.split("/")[-1]
+                        if os.path.exists(f"{output_path}/{file_name}"):
+                            st.write(file_name + " already exists")
+                            src_video_file_path = f"{output_path}/{file_name}"
+                        else:
+                            input_video_file = download_blob(input_video)
+                            src_video_file_path = move_file(input_video_file, output_path)
+                            st.write("Source Video: " + src_video_file_path)
 
-                
-                with open(f"{src_video_file_path.split('.')[0]}.json", "w") as f:
-                    # 将 response 写入文件
-                    json.dump(response, f, indent=4)
+                    
+                    with open(f"{src_video_file_path.split('.')[0]}.json", "w") as f:
+                        # 将 response 写入文件
+                        json.dump(response, f, indent=4)
 
-            with st.status("Generating highlights..."):
-                output_video_path = f"{src_video_file_path.split('.')[0]}_clipped.mp4"
-                print(clip_timestamps)
-                output = cut_and_merge_video(
-                    input_video_path=src_video_file_path,
-                    time_stamps=clip_timestamps,
-                    output_video_path=output_video_path,
-                )
-                st.write("Highlights Clipped: " + output_video_path)
-                # st.video(output)
+                with st.status("Generating highlights..."):
+                    output_video_path = f"{src_video_file_path.split('.')[0]}_clipped.mp4"
+                    # print(clip_timestamps)
+                    output = cut_and_merge_video(
+                        input_video_path=src_video_file_path,
+                        time_stamps=clip_timestamps,
+                        output_video_path=output_video_path,
+                    )
+                    st.write("Highlights Clipped: " + output_video_path)
+                    st.video(output_video_path)
 
-            # if st.button("添加解说字幕"):
-                subtitle_data = convert_to_subtitle_data(response)
+                if subtitle_checkbox:
+                    subtitle_data = convert_to_subtitle_data(response)
 
-                output_with_subtitle = add_bilingual_subtitle(output_video_path, subtitle_data, f"{output_video_path.split('.')[0]}_with_subtitle.mp4")
-                st.write("Highlights Clipped with subtitles: " + output_with_subtitle)
-                
-                st.video(output_with_subtitle)
+                    output_with_subtitle = add_bilingual_subtitle(output_video_path, subtitle_data, f"{output_video_path.split('.')[0]}_with_subtitle.mp4")
+                    st.write("Highlights Clipped with subtitles: " + output_with_subtitle)
+                    
+                    st.video(output_with_subtitle)
 
 
 elif "shot" in usecase:
@@ -698,7 +779,7 @@ elif "shot" in usecase:
     with col1:
         option = st.selectbox(
             "Choose a Prompt template",
-            ("Video shots analysis (率土之滨)"),
+            ("Video shots analysis"),
         )
         if "Video" in option:
             shot_prompt = st.text_area(
@@ -730,6 +811,7 @@ elif "shot" in usecase:
 
 
     with col2:
+        st.write("You can use `https://www.youtube.com/watch?v=6l_zfROpc5g` for a quick demo")
         if st.button("Analyze video"):
             shot_analysis_output_path = output_path + "/shot-analysis"
 
@@ -741,7 +823,7 @@ elif "shot" in usecase:
                 else:
                     response = generate(shot_prompt, video_url, generation_config)
 
-                print(response)
+                # print(response)
                 df = pd.DataFrame(json.loads(response))
 
                 st.dataframe(df, hide_index=True)

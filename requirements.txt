@@ -1,5 +1,5 @@
 streamlit
-google-cloud-aiplatform
+google-genai
 yt-dlp
 moviepy==1.0.3
 numpy
